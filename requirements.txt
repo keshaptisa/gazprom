@@ -1,0 +1,5 @@
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+ghostscript>=0.7
+numpy>=1.24.0
+pytest>=8.0.0
