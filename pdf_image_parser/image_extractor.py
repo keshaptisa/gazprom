@@ -14,6 +14,8 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
+from ocr_router import OCRRouter
+
 
 BlockType = Literal["image", "text"]
 
@@ -281,6 +283,7 @@ def extract_images(
         os.makedirs(output_images_dir, exist_ok=True)
 
     dit = DiTClassifier()
+    ocr_router = OCRRouter()
     doc = fitz.open(pdf_path)
     doc_id = parse_doc_id(pdf_path)
 
@@ -324,12 +327,14 @@ def extract_images(
                 continue
 
             if action == "ocr":
+                ocr_text = ocr_router.route(img_bgr, predicted_label)
+
                 blocks.append(
                     ExtractedImageBlock(
                         page_number=page_index + 1,
                         bbox=bbox,
                         block_type="text",
-                        content="",
+                        content=ocr_text,
                         image_path=None,
                         confidence=confidence,
                         predicted_label=predicted_label,
@@ -341,13 +346,15 @@ def extract_images(
             image_path = os.path.join(output_images_dir, filename)
             cv2.imwrite(image_path, img_bgr)
 
+            ocr_text = ocr_router.route(img_bgr, predicted_label)
+
             blocks.append(
                 ExtractedImageBlock(
                     page_number=page_index + 1,
                     bbox=bbox,
-                    block_type="image",
-                    content=f"![image](images/{filename})",
-                    image_path=image_path,
+                    block_type="text",
+                    content=ocr_text,
+                    image_path=None,
                     confidence=confidence,
                     predicted_label=predicted_label,
                 )
