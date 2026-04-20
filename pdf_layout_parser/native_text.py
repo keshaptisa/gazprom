@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import fitz
+
+
+FontWeight = Literal["normal", "semibold", "bold"]
 
 
 @dataclass
@@ -11,7 +15,27 @@ class NativeTextBlock:
     bbox: tuple[float, float, float, float]
     text: str
     font_size: float
-    is_bold: bool = False
+    font_weight: FontWeight = "normal"
+
+
+def _detect_font_weight(font_name: str) -> FontWeight:
+    name = font_name.lower()
+
+    if any(token in name for token in ("bold", "black", "heavy", "extrabold", "demi")):
+        return "bold"
+
+    if any(token in name for token in ("semibold", "medium", "book")):
+        return "semibold"
+
+    return "normal"
+
+
+def _max_font_weight(weights: list[FontWeight]) -> FontWeight:
+    if "bold" in weights:
+        return "bold"
+    if "semibold" in weights:
+        return "semibold"
+    return "normal"
 
 
 def extract_native_text_blocks(pdf_path: str) -> list[NativeTextBlock]:
@@ -30,7 +54,7 @@ def extract_native_text_blocks(pdf_path: str) -> list[NativeTextBlock]:
 
             spans_text: list[str] = []
             font_sizes: list[float] = []
-            bold_flags: list[bool] = []
+            font_weights: list[FontWeight] = []
 
             for line in lines:
                 for span in line.get("spans", []):
@@ -41,15 +65,15 @@ def extract_native_text_blocks(pdf_path: str) -> list[NativeTextBlock]:
                     spans_text.append(text)
                     font_sizes.append(float(span.get("size", 0.0)))
 
-                    font_name = str(span.get("font", "")).lower()
-                    bold_flags.append("bold" in font_name or "black" in font_name)
+                    font_name = str(span.get("font", ""))
+                    font_weights.append(_detect_font_weight(font_name))
 
             if not spans_text:
                 continue
 
             text = " ".join(spans_text).strip()
             avg_font_size = sum(font_sizes) / len(font_sizes) if font_sizes else 0.0
-            is_bold = any(bold_flags)
+            font_weight = _max_font_weight(font_weights)
 
             results.append(
                 NativeTextBlock(
@@ -57,7 +81,7 @@ def extract_native_text_blocks(pdf_path: str) -> list[NativeTextBlock]:
                     bbox=bbox,
                     text=text,
                     font_size=avg_font_size,
-                    is_bold=is_bold,
+                    font_weight=font_weight,
                 )
             )
 

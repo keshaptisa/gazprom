@@ -4,7 +4,16 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 
-ElementType = Literal["heading", "paragraph", "table", "image", "handwritten", "garbage"]
+ElementType = Literal[
+    "heading",
+    "paragraph",
+    "table",
+    "image",
+    "handwritten",
+    "garbage",
+]
+
+FontWeight = Literal["normal", "semibold", "bold"]
 
 
 @dataclass
@@ -17,6 +26,8 @@ class Element:
     image_path: str | None = None
     source_label: str | None = None
     confidence: float = 1.0
+    font_size: float = 0.0
+    font_weight: FontWeight = "normal"
 
     def to_dict(self) -> dict:
         return asdict(self)

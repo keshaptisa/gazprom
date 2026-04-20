@@ -18,13 +18,6 @@ def _alpha_ratio(text: str) -> float:
     return letters / max(len(text), 1)
 
 
-def _digit_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    digits = sum(ch.isdigit() for ch in text)
-    return digits / max(len(text), 1)
-
-
 def canonicalize_text_for_repeat_detection(text: str) -> str:
     text = normalize_text(text).lower()
     text = re.sub(r"\d+", "<num>", text)
@@ -39,6 +32,13 @@ def build_repeat_index(texts: list[str]) -> Counter[str]:
         if normalized:
             counter[normalized] += 1
     return counter
+
+
+def is_probable_caption(text: str) -> bool:
+    text = normalize_text(text).lower()
+    return bool(
+        re.match(r"^(рис\.?|figure)\s*\d+[\.\):\-]?\s*.*$", text)
+    )
 
 
 def is_probable_junk(text: str) -> bool:
@@ -73,7 +73,6 @@ def is_probable_header_or_footer(text: str, page_number: int) -> bool:
         r"^page\s*\d+$",
         rf".*\bpage\s*{page_number}\b.*",
         r"^\[\d+\]$",
-        r"^рис\.\s*\d+.*$",
         r".*\b\d{4}-\d{2}-\d{2}\b.*",
     ]
 
@@ -96,29 +95,37 @@ def is_probable_vertical_margin_text(
     text = normalize_text(text)
     lower = text.lower()
 
+    if is_probable_caption(text):
+        return False
+
+    suspicious_tokens = {
+        ".йокак",
+        "онврен",
+        "ьдо",
+        "псог",
+        "ьладап",
+        "ясь",
+        "тен",
+    }
+    if any(token in lower for token in suspicious_tokens):
+        return True
+
     if bbox is not None:
         x0, y0, x1, y1 = bbox
         width = max(1.0, x1 - x0)
         height = max(1.0, y1 - y0)
 
-        # Узкий и высокий блок у поля страницы
-        if height / width > 4.5 and len(text) < 80:
+        if height / width > 4.5 and len(text) < 120:
             return True
 
-    if len(text) < 30 and len(text.split()) <= 3 and _alpha_ratio(text) > 0.5:
+    words = text.split()
+
+    if len(words) >= 5 and all(len(word) <= 4 for word in words):
+        return True
+
+    if len(text) < 30 and len(words) <= 3 and _alpha_ratio(text) > 0.5:
         if not re.search(r"[.!?]$", text) and not re.search(r"\d{4}", text):
             return True
-
-    if len(text.split()) >= 3 and len(text) < 25:
-        return True
-
-    keywords = [
-        "черновик",
-        "draft",
-        "копия",
-    ]
-    if any(keyword in lower for keyword in keywords):
-        return True
 
     return False
 
@@ -134,13 +141,7 @@ def is_probable_watermark(text: str) -> bool:
         "demo",
         "confidential",
     ]
-    if any(keyword in lower for keyword in watermark_keywords):
-        return True
-
-    if len(text.split()) <= 2 and len(text) < 20 and _alpha_ratio(text) > 0.6:
-        return True
-
-    return False
+    return any(keyword in lower for keyword in watermark_keywords)
 
 
 def is_probable_repeated_document_noise(
@@ -151,6 +152,9 @@ def is_probable_repeated_document_noise(
     if repeat_index is None:
         return False
 
+    if is_probable_caption(text):
+        return False
+
     normalized = canonicalize_text_for_repeat_detection(text)
     if not normalized:
         return False
@@ -159,13 +163,8 @@ def is_probable_repeated_document_noise(
     if count < min_repeats:
         return False
 
-    # Повторы считаем шумом только для коротких/служебных строк,
-    # чтобы не выкинуть реальные повторяющиеся абзацы
     raw = normalize_text(text)
-    if len(raw) <= 120:
-        return True
-
-    return False
+    return len(raw) <= 120
 
 
 def clean_element_text(
@@ -175,6 +174,12 @@ def clean_element_text(
     repeat_index: Counter[str] | None = None,
 ) -> str:
     text = normalize_text(text)
+
+    if not text:
+        return ""
+
+    if is_probable_caption(text):
+        return text
 
     if is_probable_header_or_footer(text, page_number):
         return ""

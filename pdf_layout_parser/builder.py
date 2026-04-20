@@ -3,7 +3,7 @@ from __future__ import annotations
 from pdf_image_parser.image_extractor import ExtractedImageBlock, parse_doc_id
 from pdf_table_parser.table_extractor import ExtractedTable
 
-from .cleanup import build_repeat_index, clean_element_text
+from .cleanup import build_repeat_index, clean_element_text, is_probable_caption
 from .models import Document, Element, Page
 from .native_text import NativeTextBlock
 
@@ -46,6 +46,41 @@ def _overlap_ratio(
     return inter / min_area
 
 
+def _looks_like_fake_vertical_table(markdown: str) -> bool:
+    lines = [line.strip() for line in markdown.splitlines() if line.strip()]
+    if len(lines) < 4:
+        return False
+
+    header = lines[0]
+    one_column = header.count("|") <= 2
+
+    cell_values: list[str] = []
+    for line in lines:
+        if line.startswith("| ---"):
+            continue
+        parts = [part.strip() for part in line.split("|") if part.strip()]
+        cell_values.extend(parts)
+
+    many_short_rows = sum(len(cell) <= 4 for cell in cell_values) >= 6
+    suspicious_tokens = {
+        ".йокак",
+        "онврен",
+        "ьдо",
+        "псог",
+        "ьладап",
+        "ясь",
+        "тен",
+        "ди",
+    }
+    suspicious = any(
+        token in cell.lower()
+        for token in suspicious_tokens
+        for cell in cell_values
+    )
+
+    return one_column and (many_short_rows or suspicious)
+
+
 def infer_element_type_from_block(block: ExtractedImageBlock) -> str:
     label = (block.predicted_label or "").lower()
     content = (block.content or "").strip()
@@ -56,10 +91,13 @@ def infer_element_type_from_block(block: ExtractedImageBlock) -> str:
     if "|" in content and "---" in content:
         return "table"
 
+    if is_probable_caption(content):
+        return "paragraph"
+
     if "handwritten" in label:
         return "handwritten"
 
-    if len(content.splitlines()) <= 2 and len(content) < 120:
+    if len(content.splitlines()) <= 2 and len(content) < 140:
         return "heading"
 
     return "paragraph"
@@ -68,8 +106,18 @@ def infer_element_type_from_block(block: ExtractedImageBlock) -> str:
 def infer_text_element_type(block: NativeTextBlock) -> str:
     text = block.text.strip()
 
-    if len(text) < 200 and (block.font_size >= 15 or (block.font_size >= 13 and block.is_bold)):
-        return "heading"
+    if is_probable_caption(text):
+        return "paragraph"
+
+    if len(text) < 220:
+        if block.font_weight == "bold":
+            return "heading"
+        if block.font_weight == "semibold":
+            return "heading"
+        if block.font_size >= 15:
+            return "heading"
+        if block.font_size >= 12 and len(text) <= 120:
+            return "heading"
 
     return "paragraph"
 
@@ -97,7 +145,6 @@ def build_document_from_sources(
 
     repeat_index = build_repeat_index(all_texts_for_repeat_index)
 
-    # 1. Нативные таблицы из PDF
     for table in tables:
         items.append(
             {
@@ -110,10 +157,10 @@ def build_document_from_sources(
                 "confidence": table.confidence,
                 "source_label": "pdf_table_parser",
                 "font_size": 0.0,
+                "font_weight": "normal",
             }
         )
 
-    # 2. Нативный текст из PDF
     for block in native_text_blocks:
         text = clean_element_text(
             block.text,
@@ -145,10 +192,10 @@ def build_document_from_sources(
                 "confidence": 1.0,
                 "source_label": "native_text",
                 "font_size": block.font_size,
+                "font_weight": block.font_weight,
             }
         )
 
-    # 3. Блоки из image parser
     for block in blocks:
         block_type = infer_element_type_from_block(block)
 
@@ -180,17 +227,23 @@ def build_document_from_sources(
         if block.block_type == "text" and not text and block_type != "table":
             continue
 
+        markdown = block.content if block_type == "table" else ""
+
+        if block_type == "table" and _looks_like_fake_vertical_table(markdown):
+            continue
+
         items.append(
             {
                 "kind": block_type,
                 "page_number": block.page_number,
                 "bbox": block.bbox,
                 "text": text if block_type != "table" else "",
-                "markdown": block.content if block_type == "table" else "",
+                "markdown": markdown,
                 "image_path": block.image_path,
                 "confidence": block.confidence,
                 "source_label": block.predicted_label,
                 "font_size": 0.0,
+                "font_weight": "normal",
             }
         )
 
@@ -212,6 +265,8 @@ def build_document_from_sources(
             image_path=item.get("image_path"),
             source_label=item.get("source_label"),
             confidence=float(item.get("confidence", 1.0)),
+            font_size=float(item.get("font_size", 0.0)),
+            font_weight=item.get("font_weight", "normal"),
         )
         page.elements.append(element)
 
