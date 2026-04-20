@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -22,8 +23,8 @@ BlockType = Literal["image", "text"]
 MODEL_NAME = "microsoft/dit-base-finetuned-rvlcdip"
 CACHE_DIR = "./hf_models"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+BLOCK_CACHE_PATH = "output/block_cache.json"
 
-# Только те классы DiT, которые хотим уводить в OCR
 OCR_LABEL_KEYWORDS = [
     "handwritten",
     "invoice",
@@ -31,7 +32,6 @@ OCR_LABEL_KEYWORDS = [
     "letter",
 ]
 
-# Те классы DiT, которые хотим сохранять как картинки
 SAVE_LABEL_KEYWORDS = [
     "advertisement",
     "form",
@@ -98,6 +98,23 @@ def parse_doc_id(pdf_path: str) -> int:
     if not match:
         raise ValueError(f"Expected document_NNN.pdf, got: {filename}")
     return int(match.group(1))
+
+
+def load_block_cache(cache_path: str) -> dict[str, dict]:
+    if not os.path.exists(cache_path):
+        return {}
+
+    with open(cache_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_block_cache(cache_path: str, cache: dict[str, dict]) -> None:
+    cache_dir = os.path.dirname(cache_path)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
 def image_is_too_small(img_bgr: np.ndarray) -> bool:
@@ -290,6 +307,8 @@ def extract_images(
     doc_id = parse_doc_id(pdf_path)
 
     blocks: list[ExtractedImageBlock] = []
+    block_cache = load_block_cache(BLOCK_CACHE_PATH)
+    cache_changed = False
     seen_hashes: set[str] = set()
     image_order = 1
 
@@ -315,28 +334,63 @@ def extract_images(
             if img_bgr is None:
                 continue
 
-            action, confidence, predicted_label = classify_image(img_bgr, dit)
+            cached = block_cache.get(image_hash)
+            if cached:
+                action = str(cached["action"])
+                confidence = float(cached["confidence"])
+                predicted_label = str(cached["predicted_label"])
+                cached_block_type = str(cached["block_type"])
+                cached_content = str(cached["content"])
+            else:
+                action, confidence, predicted_label = classify_image(img_bgr, dit)
+
+                if action == "drop":
+                    block_cache[image_hash] = {
+                        "action": action,
+                        "confidence": confidence,
+                        "predicted_label": predicted_label,
+                        "block_type": "drop",
+                        "content": "",
+                    }
+                    cache_changed = True
+                    continue
+
+                if action == "ocr":
+                    cached_content = ocr_router.route(img_bgr, predicted_label)
+                    cached_block_type = "text"
+                else:
+                    cached_content = ""
+                    cached_block_type = "image"
+
+                block_cache[image_hash] = {
+                    "action": action,
+                    "confidence": confidence,
+                    "predicted_label": predicted_label,
+                    "block_type": cached_block_type,
+                    "content": cached_content,
+                }
+                cache_changed = True
 
             if verbose:
                 h, w = img_bgr.shape[:2]
+                source = "cache" if cached else "model"
                 print(
                     f"[page={page_index + 1}] "
                     f"bbox={bbox} size=({w}x{h}) "
-                    f"action={action} label={predicted_label} conf={confidence:.3f}"
+                    f"action={action} label={predicted_label} "
+                    f"conf={confidence:.3f} source={source}"
                 )
 
             if action == "drop":
                 continue
 
-            if action == "ocr":
-                ocr_text = ocr_router.route(img_bgr, predicted_label)
-
+            if cached_block_type == "text":
                 blocks.append(
                     ExtractedImageBlock(
                         page_number=page_index + 1,
                         bbox=bbox,
                         block_type="text",
-                        content=ocr_text,
+                        content=cached_content,
                         image_path=None,
                         confidence=confidence,
                         predicted_label=predicted_label,
@@ -360,5 +414,8 @@ def extract_images(
                 )
             )
             image_order += 1
+
+    if cache_changed:
+        save_block_cache(BLOCK_CACHE_PATH, block_cache)
 
     return blocks

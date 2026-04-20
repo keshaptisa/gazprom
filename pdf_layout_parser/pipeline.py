@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 
 from pdf_image_parser.image_extractor import extract_images
+from pdf_table_parser.table_extractor import TableExtractor
 
-from .builder import build_document_from_blocks
+from .builder import build_document_from_sources
 from .export_markdown import save_document_json, save_document_markdown
+from .native_text import extract_native_text_blocks
 
 
 def process_pdf(
@@ -15,14 +17,24 @@ def process_pdf(
     reset_output_dir: bool = False,
     verbose: bool = False,
 ):
-    blocks = extract_images(
+    image_blocks = extract_images(
         pdf_path=pdf_path,
         output_images_dir=images_dir,
         reset_output_dir=reset_output_dir,
         verbose=verbose,
     )
 
-    document = build_document_from_blocks(pdf_path, blocks)
+    table_extractor = TableExtractor()
+    native_tables = table_extractor.extract_all(pdf_path)
+
+    native_text_blocks = extract_native_text_blocks(pdf_path)
+
+    document = build_document_from_sources(
+        pdf_path=pdf_path,
+        blocks=image_blocks,
+        tables=native_tables,
+        native_text_blocks=native_text_blocks,
+    )
 
     pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
     json_path = os.path.join(output_dir, f"{pdf_name}.json")
@@ -33,7 +45,9 @@ def process_pdf(
 
     return {
         "document": document,
-        "blocks": blocks,
+        "image_blocks": image_blocks,
+        "native_tables": native_tables,
+        "native_text_blocks": native_text_blocks,
         "json_path": json_path,
         "md_path": md_path,
     }
@@ -59,6 +73,9 @@ if __name__ == "__main__":
         print("JSON:", result["json_path"])
         print("MD:", result["md_path"])
         print("PAGES:", len(result["document"].pages))
+        print("NATIVE TABLES:", len(result["native_tables"]))
+        print("NATIVE TEXT BLOCKS:", len(result["native_text_blocks"]))
+        print("IMAGE BLOCKS:", len(result["image_blocks"]))
         print("=" * 80)
 
         for page in result["document"].pages:
