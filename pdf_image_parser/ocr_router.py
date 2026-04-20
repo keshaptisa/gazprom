@@ -11,7 +11,7 @@ import easyocr
 from img2table.document import Image as Img2TableImage
 from img2table.ocr import EasyOCR as Img2TableEasyOCR
 
-from preprocess import preprocess_for_ocr, preprocess_table_variants, resize_for_ocr
+from .preprocess import preprocess_for_ocr, preprocess_table_variants, resize_for_ocr
 
 
 class OCRRouter:

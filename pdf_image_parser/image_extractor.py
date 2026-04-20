@@ -14,7 +14,7 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
-from ocr_router import OCRRouter
+from .ocr_router import OCRRouter
 
 
 BlockType = Literal["image", "text"]
