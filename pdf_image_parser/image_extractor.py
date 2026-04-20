@@ -244,14 +244,14 @@ def classify_image(
     if is_handwritten_like(feats):
         return "ocr", 0.90, "handwritten_like"
 
+    if is_table_like(feats):
+        return "ocr", 0.95, "table_like"
+
     if feats["small_components"] > 160 and feats["contour_count"] > 260:
         return "ocr", 0.88, "text_like_dense"
 
     if is_scheme_like(feats):
         return "save", 0.90, "scheme_like"
-
-    if is_table_like(feats):
-        return "ocr", 0.95, "table_like"
 
     if is_printed_text_like(feats):
         return "ocr", 0.90, "printed_text_like"
@@ -271,6 +271,8 @@ def classify_image(
         return "ocr", 0.55, "unknown_large"
 
     return "save", conf, label
+
+
 def extract_images(
     pdf_path: str,
     output_images_dir: str,
@@ -346,15 +348,13 @@ def extract_images(
             image_path = os.path.join(output_images_dir, filename)
             cv2.imwrite(image_path, img_bgr)
 
-            ocr_text = ocr_router.route(img_bgr, predicted_label)
-
             blocks.append(
                 ExtractedImageBlock(
                     page_number=page_index + 1,
                     bbox=bbox,
-                    block_type="text",
-                    content=ocr_text,
-                    image_path=None,
+                    block_type="image",
+                    content=image_path,
+                    image_path=image_path,
                     confidence=confidence,
                     predicted_label=predicted_label,
                 )
