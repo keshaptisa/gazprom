@@ -129,6 +129,8 @@ def image_is_tiny_icon(img_bgr: np.ndarray) -> bool:
 
 def compute_visual_features(img_bgr: np.ndarray) -> dict[str, float]:
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+
     h, w = gray.shape[:2]
     area = h * w
 
@@ -145,12 +147,8 @@ def compute_visual_features(img_bgr: np.ndarray) -> dict[str, float]:
     horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
 
-    horizontal_lines = cv2.morphologyEx(
-        255 - bw, cv2.MORPH_OPEN, horizontal_kernel
-    )
-    vertical_lines = cv2.morphologyEx(
-        255 - bw, cv2.MORPH_OPEN, vertical_kernel
-    )
+    horizontal_lines = cv2.morphologyEx(255 - bw, cv2.MORPH_OPEN, horizontal_kernel)
+    vertical_lines = cv2.morphologyEx(255 - bw, cv2.MORPH_OPEN, vertical_kernel)
 
     hline_ratio = float((horizontal_lines > 0).mean())
     vline_ratio = float((vertical_lines > 0).mean())
@@ -161,6 +159,19 @@ def compute_visual_features(img_bgr: np.ndarray) -> dict[str, float]:
 
     contours, _ = cv2.findContours(255 - bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contour_count = len(contours)
+
+    saturation = hsv[:, :, 1]
+    mean_saturation = float(np.mean(saturation))
+    high_saturation_ratio = float((saturation > 60).mean())
+
+    rgb_small = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    quantized = (rgb_small // 64).reshape(-1, 3)
+    _, counts = np.unique(quantized, axis=0, return_counts=True)
+    dominant_colors_count = int(np.sum(counts > max(50, area * 0.003)))
+
+    dark_pixel_ratio = float((gray < 120).mean())
+    light_pixel_ratio = float((gray > 200).mean())
+    mid_pixel_ratio = float(((gray >= 120) & (gray <= 200)).mean())
 
     return {
         "height": float(h),
@@ -174,6 +185,12 @@ def compute_visual_features(img_bgr: np.ndarray) -> dict[str, float]:
         "vline_ratio": vline_ratio,
         "small_components": float(small_components),
         "contour_count": float(contour_count),
+        "mean_saturation": mean_saturation,
+        "high_saturation_ratio": high_saturation_ratio,
+        "dominant_colors_count": float(dominant_colors_count),
+        "dark_pixel_ratio": dark_pixel_ratio,
+        "light_pixel_ratio": light_pixel_ratio,
+        "mid_pixel_ratio": mid_pixel_ratio,
     }
 
 
@@ -181,13 +198,57 @@ def is_page_like(feats: dict[str, float]) -> bool:
     return feats["height"] > 1000 and feats["width"] > 700
 
 
-def is_table_like(feats: dict[str, float]) -> bool:
+def is_monochrome_text_like_color(feats: dict[str, float]) -> bool:
     return (
-        feats["area"] > 120000
-        and feats["hline_ratio"] > 0.030
-        and feats["vline_ratio"] > 0.018
-        and feats["small_components"] > 220
+        feats["mean_saturation"] < 18
+        and feats["dominant_colors_count"] <= 3
+        and feats["light_pixel_ratio"] > 0.55
+        and feats["dark_pixel_ratio"] > 0.03
+        and feats["dark_pixel_ratio"] < 0.35
     )
+
+
+def is_colored_diagram_like(feats: dict[str, float]) -> bool:
+    return (
+        feats["area"] > 25000
+        and feats["mean_saturation"] > 22
+        and feats["high_saturation_ratio"] > 0.035
+        and feats["dominant_colors_count"] >= 4
+        and feats["black_ratio"] < 0.35
+        and feats["hline_ratio"] < 0.025
+        and feats["vline_ratio"] < 0.025
+    )
+
+
+def is_table_like(feats: dict[str, float]) -> bool:
+    strong_grid = (
+        feats["area"] > 80000
+        and feats["hline_ratio"] > 0.018
+        and feats["vline_ratio"] > 0.012
+        and feats["small_components"] > 120
+        and feats["dominant_colors_count"] <= 3
+    )
+
+    medium_grid = (
+        feats["area"] > 100000
+        and feats["hline_ratio"] > 0.022
+        and feats["vline_ratio"] > 0.010
+        and feats["contour_count"] > 180
+        and feats["mean_saturation"] < 18
+        and feats["dominant_colors_count"] <= 3
+    )
+
+    text_grid = (
+        feats["area"] > 70000
+        and feats["hline_ratio"] > 0.014
+        and feats["vline_ratio"] > 0.010
+        and feats["row_transitions"] > 12
+        and feats["col_transitions"] > 8
+        and feats["mean_saturation"] < 18
+        and feats["dominant_colors_count"] <= 3
+    )
+
+    return strong_grid or medium_grid or text_grid
 
 
 def is_printed_text_like(feats: dict[str, float]) -> bool:
@@ -252,27 +313,43 @@ def classify_image(
 
     feats = compute_visual_features(img_bgr)
 
+    # 1. Полностраничный растр — в OCR
     if is_page_like(feats):
         return "ocr", 0.95, "page_like"
 
-    if is_small_text_or_handwritten_like(feats):
-        return "ocr", 0.92, "small_text_or_handwritten_like"
+    # 2. Явные цветные схемы/диаграммы — сразу как картинки
+    if is_colored_diagram_like(feats):
+        return "save", 0.95, "scheme_like_color"
 
-    if is_handwritten_like(feats):
-        return "ocr", 0.90, "handwritten_like"
-
+    # 3. Явные таблицы — раньше mixed text class
     if is_table_like(feats):
         return "ocr", 0.95, "table_like"
 
-    if feats["small_components"] > 160 and feats["contour_count"] > 260:
-        return "ocr", 0.88, "text_like_dense"
+    # 4. Рукописный раньше mixed-класса
+    if is_handwritten_like(feats):
+        return "ocr", 0.90, "handwritten_like"
 
-    if is_scheme_like(feats):
-        return "save", 0.90, "scheme_like"
+    # 5. Широкий смешанный OCR-класс
+    if is_small_text_or_handwritten_like(feats):
+        return "ocr", 0.92, "small_text_or_handwritten_like"
 
+    # 6. Печатный текст
     if is_printed_text_like(feats):
         return "ocr", 0.90, "printed_text_like"
 
+    # 7. Монохромный текстовый блок можно спасать в OCR
+    if is_monochrome_text_like_color(feats):
+        return "ocr", 0.86, "monochrome_text_like"
+
+    # 8. Плотный текстоподобный fallback
+    if feats["small_components"] > 160 and feats["contour_count"] > 260:
+        return "ocr", 0.88, "text_like_dense"
+
+    # 9. Доп. схема по старой эвристике
+    if is_scheme_like(feats):
+        return "save", 0.90, "scheme_like"
+
+    # 10. Только теперь подключаем DiT
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(rgb)
 

@@ -4,6 +4,15 @@ import re
 from collections import Counter
 
 
+WATERMARK_PATTERNS = [
+    r"\bчерновик\b",
+    r"\bdraft\b",
+    r"не\s+для\s+распространения",
+    r"\bобразец\b",
+    r"\bконфиденциально\b",
+]
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
@@ -131,17 +140,8 @@ def is_probable_vertical_margin_text(
 
 
 def is_probable_watermark(text: str) -> bool:
-    text = normalize_text(text)
-    lower = text.lower()
-
-    watermark_keywords = [
-        "черновик",
-        "draft",
-        "sample",
-        "demo",
-        "confidential",
-    ]
-    return any(keyword in lower for keyword in watermark_keywords)
+    text = normalize_text(text).lower()
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in WATERMARK_PATTERNS)
 
 
 def is_probable_repeated_document_noise(
@@ -181,13 +181,13 @@ def clean_element_text(
     if is_probable_caption(text):
         return text
 
+    if is_probable_watermark(text):
+        return ""
+
     if is_probable_header_or_footer(text, page_number):
         return ""
 
     if is_probable_vertical_margin_text(text, bbox):
-        return ""
-
-    if is_probable_watermark(text):
         return ""
 
     if is_probable_repeated_document_noise(text, repeat_index):
