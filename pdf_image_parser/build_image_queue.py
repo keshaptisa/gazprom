@@ -151,16 +151,23 @@ def is_small_text_candidate(feats: dict[str, float]) -> bool:
     )
 
 
+def is_obviously_colored(feats: dict[str, float]) -> bool:
+    return (
+        feats["mean_saturation"] > 22
+        and feats["high_saturation_ratio"] > 0.04
+    )
+
+
 def is_probable_image_block(feats: dict[str, float]) -> bool:
     return (
         (
-            feats["mean_saturation"] > 16
-            and feats["dominant_colors_count"] >= 4
+            feats["mean_saturation"] > 22
+            and feats["dominant_colors_count"] >= 5
         )
-        or feats["high_saturation_ratio"] > 0.03
+        or feats["high_saturation_ratio"] > 0.06
         or (
-            feats["small_components"] < 30
-            and feats["contour_count"] < 60
+            feats["small_components"] < 20
+            and feats["contour_count"] < 45
         )
     )
 
@@ -170,9 +177,8 @@ def has_large_colored_shapes(img_bgr: np.ndarray) -> bool:
     h, w = img_bgr.shape[:2]
     area = h * w
 
-    mask = cv2.inRange(hsv, (0, 40, 40), (180, 255, 255))
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask = cv2.inRange(hsv, (0, 30, 40), (180, 255, 255))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -183,23 +189,22 @@ def has_large_colored_shapes(img_bgr: np.ndarray) -> bool:
 
     for c in contours:
         a = cv2.contourArea(c)
-        if a > area * 0.015:
+        if a > area * 0.01:
             large_count += 1
             covered_area += a
 
     covered_ratio = covered_area / max(area, 1)
-    return large_count >= 2 and covered_ratio > 0.08
+    return (large_count >= 1 and covered_ratio > 0.10) or covered_ratio > 0.15
 
 
 def is_colored_diagram_like(feats: dict[str, float]) -> bool:
     return (
-        feats["area"] > 20000
-        and feats["mean_saturation"] > 14
-        and feats["high_saturation_ratio"] > 0.02
+        feats["area"] > 12000
+        and feats["mean_saturation"] > 9
+        and feats["high_saturation_ratio"] > 0.01
         and feats["dominant_colors_count"] >= 4
         and feats["hline_ratio"] < 0.02
         and feats["vline_ratio"] < 0.02
-        and feats["row_transitions"] < 12
     )
 
 
@@ -267,15 +272,6 @@ def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str
         "invoice",
     }
 
-    save_priority_labels = {
-        "presentation",
-        "advertisement",
-        "scheme_like",
-        "scheme_like_color",
-        "file folder",
-        "form",
-    }
-
     if action == "drop":
         return "drop"
 
@@ -291,12 +287,14 @@ def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str
     if is_composite_raster_block(feats):
         return "composite"
 
-    # Новый жёсткий фильтр цветных фигур
-    if has_large_colored_shapes(img_bgr):
+    if is_obviously_colored(feats):
+        if label in text_priority_labels and feats["small_components"] > 120:
+            return "ocr"
         return "non_text"
 
-    # Дополнительный фильтр цветных схем
-    if is_colored_diagram_like(feats):
+    if has_large_colored_shapes(img_bgr):
+        if label in text_priority_labels and feats["small_components"] > 120:
+            return "ocr"
         return "non_text"
 
     if label in text_priority_labels:
@@ -308,13 +306,16 @@ def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str
     if is_monochrome_text_like_color(feats):
         return "ocr"
 
-    if is_small_text_candidate(feats) and not is_probable_image_block(feats):
+    if is_small_text_candidate(feats):
         return "ocr"
 
-    if label in save_priority_labels:
+    if is_colored_diagram_like(feats):
         return "non_text"
 
-    if action == "ocr" and not is_probable_image_block(feats):
+    if is_probable_image_block(feats):
+        return "non_text"
+
+    if action == "ocr":
         return "ocr"
 
     return "non_text"
