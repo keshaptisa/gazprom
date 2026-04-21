@@ -35,6 +35,7 @@ ALL_DIR = OUT_DIR / "all_images"
 OCR_DIR = OUT_DIR / "ocr_candidates"
 TABLE_DIR = OUT_DIR / "table_candidates"
 NON_TEXT_DIR = OUT_DIR / "non_text_images"
+COMPOSITE_DIR = OUT_DIR / "composite_raster_blocks"
 
 MANIFEST_CSV = OUT_DIR / "image_queue_manifest.csv"
 
@@ -62,6 +63,7 @@ def reset_output() -> None:
     OCR_DIR.mkdir(parents=True, exist_ok=True)
     TABLE_DIR.mkdir(parents=True, exist_ok=True)
     NON_TEXT_DIR.mkdir(parents=True, exist_ok=True)
+    COMPOSITE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def file_sha1(data: bytes) -> str:
@@ -114,45 +116,101 @@ def is_monochrome_text_like_color(feats: dict[str, float]) -> bool:
     )
 
 
-def is_small_text_candidate(feats: dict[str, float]) -> bool:
-    return (
-        feats["area"] < 120000
-        and feats["aspect_ratio"] > 1.3
-        and feats["mean_saturation"] < 18
-        and feats["dominant_colors_count"] <= 3
-        and feats["light_pixel_ratio"] > 0.60
-        and feats["dark_pixel_ratio"] > 0.015
-        and feats["dark_pixel_ratio"] < 0.30
-        and feats["small_components"] > 20
-        and feats["contour_count"] > 45
-        and feats["hline_ratio"] < 0.015
-        and feats["vline_ratio"] < 0.015
-    )
-
-
 def is_printed_text_rescue(feats: dict[str, float]) -> bool:
     return (
-        feats["mean_saturation"] < 20
-        and feats["dominant_colors_count"] <= 4
-        and feats["light_pixel_ratio"] > 0.55
-        and feats["dark_pixel_ratio"] > 0.015
-        and feats["black_ratio"] < 0.32
-        and feats["small_components"] > 80
-        and feats["contour_count"] > 120
+        feats["aspect_ratio"] > 1.8
+        and feats["mean_saturation"] < 18
+        and feats["high_saturation_ratio"] < 0.03
+        and feats["light_pixel_ratio"] > 0.45
+        and feats["dark_pixel_ratio"] > 0.005
+        and feats["dark_pixel_ratio"] < 0.22
+        and feats["black_ratio"] < 0.35
+        and feats["small_components"] > 35
+        and feats["contour_count"] > 60
+        and feats["row_transitions"] > 3
         and feats["hline_ratio"] < 0.02
         and feats["vline_ratio"] < 0.02
     )
+
+
+def is_small_text_candidate(feats: dict[str, float]) -> bool:
+    return (
+        feats["area"] < 140000
+        and feats["aspect_ratio"] > 1.6
+        and feats["mean_saturation"] < 16
+        and feats["high_saturation_ratio"] < 0.025
+        and feats["dominant_colors_count"] <= 4
+        and feats["light_pixel_ratio"] > 0.55
+        and feats["dark_pixel_ratio"] > 0.01
+        and feats["dark_pixel_ratio"] < 0.22
+        and feats["small_components"] > 25
+        and feats["contour_count"] > 50
+        and feats["row_transitions"] > 2
+        and feats["hline_ratio"] < 0.012
+        and feats["vline_ratio"] < 0.012
+    )
+
+
+def is_probable_image_block(feats: dict[str, float]) -> bool:
+    return (
+        (
+            feats["mean_saturation"] > 16
+            and feats["dominant_colors_count"] >= 4
+        )
+        or feats["high_saturation_ratio"] > 0.03
+        or (
+            feats["small_components"] < 30
+            and feats["contour_count"] < 60
+        )
+    )
+
+
+def has_large_colored_shapes(img_bgr: np.ndarray) -> bool:
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    h, w = img_bgr.shape[:2]
+    area = h * w
+
+    mask = cv2.inRange(hsv, (0, 40, 40), (180, 255, 255))
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    large_count = 0
+    covered_area = 0.0
+
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a > area * 0.015:
+            large_count += 1
+            covered_area += a
+
+    covered_ratio = covered_area / max(area, 1)
+    return large_count >= 2 and covered_ratio > 0.08
 
 
 def is_colored_diagram_like(feats: dict[str, float]) -> bool:
     return (
-        feats["area"] > 50000
-        and feats["mean_saturation"] > 28
-        and feats["high_saturation_ratio"] > 0.05
-        and feats["dominant_colors_count"] >= 3
-        and feats["small_components"] < 180
+        feats["area"] > 20000
+        and feats["mean_saturation"] > 14
+        and feats["high_saturation_ratio"] > 0.02
+        and feats["dominant_colors_count"] >= 4
         and feats["hline_ratio"] < 0.02
         and feats["vline_ratio"] < 0.02
+        and feats["row_transitions"] < 12
+    )
+
+
+def is_composite_raster_block(feats: dict[str, float]) -> bool:
+    return (
+        feats["area"] > 180000
+        and 0.7 < feats["aspect_ratio"] < 1.8
+        and feats["small_components"] > 120
+        and feats["contour_count"] > 220
+        and feats["row_transitions"] > 6
+        and feats["mean_saturation"] < 22
     )
 
 
@@ -230,6 +288,17 @@ def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str
     if is_soft_table_candidate(feats) and action == "ocr":
         return "table"
 
+    if is_composite_raster_block(feats):
+        return "composite"
+
+    # Новый жёсткий фильтр цветных фигур
+    if has_large_colored_shapes(img_bgr):
+        return "non_text"
+
+    # Дополнительный фильтр цветных схем
+    if is_colored_diagram_like(feats):
+        return "non_text"
+
     if label in text_priority_labels:
         return "ocr"
 
@@ -239,16 +308,13 @@ def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str
     if is_monochrome_text_like_color(feats):
         return "ocr"
 
-    if is_small_text_candidate(feats):
+    if is_small_text_candidate(feats) and not is_probable_image_block(feats):
         return "ocr"
 
     if label in save_priority_labels:
         return "non_text"
 
-    if is_colored_diagram_like(feats) and action != "ocr":
-        return "non_text"
-
-    if action == "ocr":
+    if action == "ocr" and not is_probable_image_block(feats):
         return "ocr"
 
     return "non_text"
@@ -261,6 +327,8 @@ def copy_to_bucket(saved_path: Path, file_name: str, bucket: str) -> Path | None
         target = TABLE_DIR / file_name
     elif bucket == "non_text":
         target = NON_TEXT_DIR / file_name
+    elif bucket == "composite":
+        target = COMPOSITE_DIR / file_name
     else:
         return None
 
@@ -357,6 +425,7 @@ def main() -> None:
     ocr_count = sum(1 for r in all_records if r.final_bucket == "ocr")
     table_count = sum(1 for r in all_records if r.final_bucket == "table")
     non_text_count = sum(1 for r in all_records if r.final_bucket == "non_text")
+    composite_count = sum(1 for r in all_records if r.final_bucket == "composite")
 
     label_counter = Counter(r.predicted_label for r in all_records)
     bucket_counter = Counter(r.final_bucket for r in all_records)
@@ -367,10 +436,12 @@ def main() -> None:
     print(f"OCR candidates: {OCR_DIR}")
     print(f"Table candidates: {TABLE_DIR}")
     print(f"Non-text images: {NON_TEXT_DIR}")
+    print(f"Composite raster blocks: {COMPOSITE_DIR}")
     print(f"Total queued images: {len(all_records)}")
     print(f"OCR candidates: {ocr_count}")
     print(f"Table candidates: {table_count}")
     print(f"Non-text images: {non_text_count}")
+    print(f"Composite raster blocks: {composite_count}")
 
     print("\nTop labels:")
     for label, count in label_counter.most_common(20):
