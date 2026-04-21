@@ -1,5 +1,7 @@
-pymupdf>=1.24.0
-pdfplumber>=0.11.0
-ghostscript>=0.7
+pdfplumber>=0.10.0
+PyMuPDF>=1.23.0
+torch>=2.0.0
+transformers>=4.30.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
 numpy>=1.24.0
-pytest>=8.0.0
