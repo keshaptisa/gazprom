@@ -38,11 +38,6 @@ NON_TEXT_DIR = OUT_DIR / "non_text_images"
 
 MANIFEST_CSV = OUT_DIR / "image_queue_manifest.csv"
 
-DEBUG_MAX_PRINTS = 60
-DEBUG_TABLE_LABEL_PRINTS = 0
-DEBUG_TO_TABLE_PRINTS = 0
-DEBUG_NEAR_TABLE_PRINTS = 0
-
 
 @dataclass
 class QueueRecord:
@@ -95,31 +90,65 @@ def save_manifest(records: list[QueueRecord], csv_path: Path) -> None:
 
 def build_bucket_features(img_bgr: np.ndarray) -> dict[str, float]:
     feats = compute_visual_features(img_bgr)
-
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
     feats["dark_pixel_ratio"] = float((gray < 120).mean())
     feats["light_pixel_ratio"] = float((gray > 200).mean())
     feats["mid_pixel_ratio"] = float(((gray >= 120) & (gray <= 200)).mean())
 
+    h, w = gray.shape[:2]
+    feats["aspect_ratio"] = float(w / max(h, 1))
+
     return feats
 
 
 def is_monochrome_text_like_color(feats: dict[str, float]) -> bool:
     return (
-        feats["mean_saturation"] < 18
+        feats["mean_saturation"] < 16
         and feats["dominant_colors_count"] <= 3
-        and feats["light_pixel_ratio"] > 0.55
+        and feats["light_pixel_ratio"] > 0.62
         and feats["dark_pixel_ratio"] > 0.03
-        and feats["dark_pixel_ratio"] < 0.35
+        and feats["dark_pixel_ratio"] < 0.28
+        and feats["small_components"] > 70
+        and feats["contour_count"] > 140
+    )
+
+
+def is_small_text_candidate(feats: dict[str, float]) -> bool:
+    return (
+        feats["area"] < 120000
+        and feats["aspect_ratio"] > 1.3
+        and feats["mean_saturation"] < 18
+        and feats["dominant_colors_count"] <= 3
+        and feats["light_pixel_ratio"] > 0.60
+        and feats["dark_pixel_ratio"] > 0.015
+        and feats["dark_pixel_ratio"] < 0.30
+        and feats["small_components"] > 20
+        and feats["contour_count"] > 45
+        and feats["hline_ratio"] < 0.015
+        and feats["vline_ratio"] < 0.015
+    )
+
+
+def is_printed_text_rescue(feats: dict[str, float]) -> bool:
+    return (
+        feats["mean_saturation"] < 20
+        and feats["dominant_colors_count"] <= 4
+        and feats["light_pixel_ratio"] > 0.55
+        and feats["dark_pixel_ratio"] > 0.015
+        and feats["black_ratio"] < 0.32
+        and feats["small_components"] > 80
+        and feats["contour_count"] > 120
+        and feats["hline_ratio"] < 0.02
+        and feats["vline_ratio"] < 0.02
     )
 
 
 def is_colored_diagram_like(feats: dict[str, float]) -> bool:
     return (
         feats["area"] > 50000
-        and feats["mean_saturation"] > 30
-        and feats["high_saturation_ratio"] > 0.06
+        and feats["mean_saturation"] > 28
+        and feats["high_saturation_ratio"] > 0.05
         and feats["dominant_colors_count"] >= 3
         and feats["small_components"] < 180
         and feats["hline_ratio"] < 0.02
@@ -161,95 +190,67 @@ def is_soft_table_candidate(feats: dict[str, float]) -> bool:
 
 
 def decide_bucket(action: str, predicted_label: str, img_bgr: np.ndarray) -> str:
-    global DEBUG_TABLE_LABEL_PRINTS, DEBUG_TO_TABLE_PRINTS, DEBUG_NEAR_TABLE_PRINTS
-
     label = (predicted_label or "").lower().strip()
     feats = build_bucket_features(img_bgr)
+
+    text_priority_labels = {
+        "handwritten_like",
+        "handwritten",
+        "small_text_or_handwritten_like",
+        "text_like_dense",
+        "printed_text_like",
+        "monochrome_text_like",
+        "page_like",
+        "scientific report",
+        "scientific publication",
+        "questionnaire",
+        "memo",
+        "letter",
+        "invoice",
+    }
+
+    save_priority_labels = {
+        "presentation",
+        "advertisement",
+        "scheme_like",
+        "scheme_like_color",
+        "file folder",
+        "form",
+    }
 
     if action == "drop":
         return "drop"
 
-    if label == "table_like" and DEBUG_TABLE_LABEL_PRINTS < DEBUG_MAX_PRINTS:
-        print(
-            "DEBUG_TABLE_LABEL",
-            label,
-            f"h={feats['hline_ratio']:.4f}",
-            f"v={feats['vline_ratio']:.4f}",
-            f"row={feats['row_transitions']:.2f}",
-            f"col={feats['col_transitions']:.2f}",
-            f"sat={feats['mean_saturation']:.2f}",
-            f"colors={int(feats['dominant_colors_count'])}",
-        )
-        DEBUG_TABLE_LABEL_PRINTS += 1
-
-    near_table = (
-        feats["hline_ratio"] > 0.004
-        or feats["vline_ratio"] > 0.003
-    )
-    if near_table and DEBUG_NEAR_TABLE_PRINTS < DEBUG_MAX_PRINTS:
-        print(
-            "DEBUG_NEAR_TABLE",
-            label,
-            f"h={feats['hline_ratio']:.4f}",
-            f"v={feats['vline_ratio']:.4f}",
-            f"row={feats['row_transitions']:.2f}",
-            f"col={feats['col_transitions']:.2f}",
-            f"sat={feats['mean_saturation']:.2f}",
-            f"colors={int(feats['dominant_colors_count'])}",
-            f"small={int(feats['small_components'])}",
-            f"contours={int(feats['contour_count'])}",
-        )
-        DEBUG_NEAR_TABLE_PRINTS += 1
-
-    # 1. Явные цветные схемы/диаграммы
-    if is_colored_diagram_like(feats):
-        return "non_text"
-
-    # 2. Таблицы
     if label == "table_like":
-        if DEBUG_TO_TABLE_PRINTS < DEBUG_MAX_PRINTS:
-            print("DEBUG_TO_TABLE label=table_like")
-            DEBUG_TO_TABLE_PRINTS += 1
         return "table"
 
     if is_strict_table_candidate(feats):
-        if DEBUG_TO_TABLE_PRINTS < DEBUG_MAX_PRINTS:
-            print(
-                "DEBUG_TO_TABLE strict",
-                label,
-                f"h={feats['hline_ratio']:.4f}",
-                f"v={feats['vline_ratio']:.4f}",
-                f"row={feats['row_transitions']:.2f}",
-                f"col={feats['col_transitions']:.2f}",
-                f"sat={feats['mean_saturation']:.2f}",
-                f"colors={int(feats['dominant_colors_count'])}",
-            )
-            DEBUG_TO_TABLE_PRINTS += 1
         return "table"
 
     if is_soft_table_candidate(feats) and action == "ocr":
-        if DEBUG_TO_TABLE_PRINTS < DEBUG_MAX_PRINTS:
-            print(
-                "DEBUG_TO_TABLE soft",
-                label,
-                f"h={feats['hline_ratio']:.4f}",
-                f"v={feats['vline_ratio']:.4f}",
-                f"row={feats['row_transitions']:.2f}",
-                f"col={feats['col_transitions']:.2f}",
-                f"sat={feats['mean_saturation']:.2f}",
-                f"colors={int(feats['dominant_colors_count'])}",
-            )
-            DEBUG_TO_TABLE_PRINTS += 1
         return "table"
 
-    # 3. Всё OCR-подобное и монохромные текстовые блоки
-    if action == "ocr":
+    if label in text_priority_labels:
+        return "ocr"
+
+    if is_printed_text_rescue(feats):
         return "ocr"
 
     if is_monochrome_text_like_color(feats):
         return "ocr"
 
-    # 4. Остальное считаем нетекстовыми картинками
+    if is_small_text_candidate(feats):
+        return "ocr"
+
+    if label in save_priority_labels:
+        return "non_text"
+
+    if is_colored_diagram_like(feats) and action != "ocr":
+        return "non_text"
+
+    if action == "ocr":
+        return "ocr"
+
     return "non_text"
 
 

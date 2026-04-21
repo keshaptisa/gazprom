@@ -213,7 +213,7 @@ def is_colored_diagram_like(feats: dict[str, float]) -> bool:
         feats["area"] > 25000
         and feats["mean_saturation"] > 22
         and feats["high_saturation_ratio"] > 0.035
-        and feats["dominant_colors_count"] >= 4
+        and feats["dominant_colors_count"] >= 3
         and feats["black_ratio"] < 0.35
         and feats["hline_ratio"] < 0.025
         and feats["vline_ratio"] < 0.025
