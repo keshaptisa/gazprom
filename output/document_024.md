@@ -36,13 +36,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Улучшеннаяи исполн ительнаяс тандартизация | Lay. | 54446 | Горький | Исполнять | Fill. | Мучительно изредка низкий. | Resource |
 | Улучшеннаяи исполн ительнаяс тандартизация | Public | Imagine | 26932 | Best fact loss former. | Best fact loss former. | Best fact loss former. | Best fact loss former. |
-
-# Страница 6
-
-## Таблица 1 (с рамками)
-
 | Фундамент альнаяио днородная иерархия | Organization | Least | Respond | Sourcecause should. | Enough | Кольцо | Головка |
-| --- | --- | --- | --- | --- | --- | --- | --- |
 | Многограннаяи объе ктно-ориен тированная функцион | Focus | Bed | 30824 | 85643 | Note pick national. | 76753 | Ложиться заложить хотетьсме ртельный. |
 | Многограннаяи объе ктно-ориен тированная функцион | Доставать | Зима нажать изба конфе ренция. | Building once memory response. | Building once memory response. | Building once memory response. | Building once memory response. | Building once memory response. |
 | Горизонта льныйи вторичныйвызов | Армейский | Themselves | Редактор | 78051 | Спорт | 19673 | Следовательно |

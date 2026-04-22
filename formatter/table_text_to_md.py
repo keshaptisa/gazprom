@@ -28,6 +28,13 @@ def _normalize_grid(data):
     return result
 
 
+def _clear_single_char_cells(grid):
+    return [
+        ["" if len(cell) <= 1 else cell for cell in row]
+        for row in grid
+    ]
+
+
 def _drop_empty_columns(grid):
     if not grid:
         return grid
@@ -46,6 +53,7 @@ def _drop_empty_rows(grid):
 def table_to_markdown(table_data) -> str:
     data = table_data.get("data") if isinstance(table_data, dict) else table_data
     grid = _normalize_grid(data or [])
+    grid = _clear_single_char_cells(grid)
     grid = _drop_empty_rows(grid)
     grid = _drop_empty_columns(grid)
     if not grid:

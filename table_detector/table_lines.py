@@ -97,52 +97,45 @@ def find_clean_tables(pdf_path):
                 all_pages_tables[page_num] = found_tables_on_page
 
             # Логика склейки (stitch) таблиц между страницами
-            final_tables = {} # {page_num: [table_data]}
-            skip_tables = set() # (page_num, table_index)
+            final_tables = {page_num: list(tables) for page_num, tables in all_pages_tables.items()}
 
-            for page_num in sorted(all_pages_tables.keys()):
-                tables_on_page = all_pages_tables[page_num]
-                page_final_tables = []
-                
-                for idx, table in enumerate(tables_on_page):
-                    if (page_num, idx) in skip_tables:
-                        continue
+            # Склейка таблиц между соседними страницами
+            pages_sorted = sorted(final_tables.keys())
+            for i in range(len(pages_sorted) - 1):
+                curr_page = pages_sorted[i]
+                next_page = pages_sorted[i + 1]
 
-                    # Проверяем склейку с предыдущей таблицей на этой же странице
-                    is_continuation = False
-                    if idx > 0:
-                        prev_table_on_page = all_pages_tables[page_num][idx - 1]
+                # Только для строго следующих страниц
+                if next_page != curr_page + 1:
+                    continue
 
-                        # Условия склейки на одной странице
-                        prev_bottom_on_page = prev_table_on_page["bbox"][3]
-                        curr_top_on_page = table["bbox"][1]
-                        distance_on_page = curr_top_on_page - prev_bottom_on_page
+                curr_tables = final_tables[curr_page]
+                next_tables = final_tables[next_page]
 
-                        # Точное совпадение координат (допуск 5 пунктов)
-                        left_diff_page = abs(prev_table_on_page["bbox"][0] - table["bbox"][0])
-                        right_diff_page = abs(prev_table_on_page["bbox"][2] - table["bbox"][2])
-                        left_match_page = left_diff_page < 5
-                        right_match_page = right_diff_page < 5
+                if not curr_tables or not next_tables:
+                    continue
 
-                        # Расстояние должно быть маленьким (< 150 пунктов)
-                        distance_ok_page = distance_on_page < 150
+                last_table = curr_tables[-1]
+                first_table = next_tables[0]
 
-                        # Проверка кол-ва столбцов (только для таблиц)
-                        cols_match_page = (prev_table_on_page["cols"] == table["cols"])
+                # Совпадение левой и правой границы (допуск 5 пунктов)
+                left_match = abs(last_table["bbox"][0] - first_table["bbox"][0]) < 5
+                right_match = abs(last_table["bbox"][2] - first_table["bbox"][2]) < 5
 
-                        if (left_match_page and right_match_page and distance_ok_page and cols_match_page):
-                            is_continuation = True
-                            # Склеиваем данные таблиц
-                            if page_final_tables:
-                                page_final_tables[-1]["data"].extend(table["data"])
-                                page_final_tables[-1]["rows"] += table["rows"]
-                            else:
-                                page_final_tables.append(table)
+                # Одинаковое кол-во столбцов
+                cols_match = last_table["cols"] == first_table["cols"]
 
-                    if not is_continuation:
-                        page_final_tables.append(table)
-                
-                final_tables[page_num] = page_final_tables
+                # Последняя таблица должна быть у нижнего края страницы
+                curr_page_height = last_table["page_height"]
+                near_bottom = (curr_page_height - last_table["bbox"][3]) < CONFIG["page_stitch_bottom_margin"]
+
+                # Первая таблица следующей страницы должна быть у верхнего края
+                near_top = first_table["bbox"][1] < CONFIG["page_stitch_top_margin"]
+
+                if left_match and right_match and cols_match and near_bottom and near_top:
+                    last_table["data"].extend(first_table["data"])
+                    last_table["rows"] += first_table["rows"]
+                    final_tables[next_page] = next_tables[1:]
 
     except Exception as e:
         print(f"Ошибка при обработке {pdf_path}: {e}")

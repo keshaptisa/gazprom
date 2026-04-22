@@ -363,6 +363,21 @@ def table_to_markdown(table_data):
                                 row[c] = cleaned_data[rr][c]
                                 break
     
+    # Обнуляем ячейки с одним символом
+    cleaned_data = [
+        ["" if len(cell) <= 1 else cell for cell in row]
+        for row in cleaned_data
+    ]
+
+    # Удаляем строки, где все ячейки пустые
+    cleaned_data = [row for row in cleaned_data if any(cell for cell in row)]
+
+    # Удаляем колонки, где все ячейки пустые
+    if cleaned_data:
+        n_cols = len(cleaned_data[0])
+        keep_cols = [c for c in range(n_cols) if any(row[c] for row in cleaned_data if c < len(row))]
+        cleaned_data = [[row[c] for c in keep_cols if c < len(row)] for row in cleaned_data]
+
     # Объединяем многоуровневые заголовки
     cleaned_data = merge_multilevel_headers(cleaned_data)
     
